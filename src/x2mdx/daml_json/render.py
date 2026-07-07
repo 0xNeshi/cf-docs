@@ -18,7 +18,7 @@ from x2mdx.reference_pages import (
     render_collection_page,
     safe_markdown_text,
 )
-from x2mdx.templating import markdown_page, render_template
+from x2mdx.templating import escape_html, markdown_page, render_template
 
 EXCLUDED_MODULE_NAMES = frozenset(
     {
@@ -40,8 +40,21 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
-def escape_md_cell(text: str) -> str:
-    return text.replace("|", r"\|").replace("\n", "<br/>")
+def render_fields_response_fields(fields: list[dict[str, Any]]) -> str:
+    if not fields:
+        return "(no fields)"
+    blocks: list[str] = []
+    for field in fields:
+        name = escape_html(str(field["fd_name"]))
+        type_label = escape_html(render_type(field["fd_type"]))
+        description = render_doc_blocks(field.get("fd_descr")).strip()
+        if description:
+            blocks.append(
+                f'<ResponseField name="{name}" type="{type_label}">\n{description}\n</ResponseField>'
+            )
+        else:
+            blocks.append(f'<ResponseField name="{name}" type="{type_label}" />')
+    return "\n\n".join(blocks)
 
 
 def render_doc_blocks(descr: Any) -> str:
@@ -206,22 +219,6 @@ def render_context(ctx: list[Any]) -> str:
     return f"{items[0]} => " if len(items) == 1 else f"({', '.join(items)}) => "
 
 
-def render_fields_table(fields: list[dict[str, Any]]) -> str:
-    if not fields:
-        return "(no fields)"
-    rows = [
-        "| Field | Type | Description |",
-        "| :---- | :--- | :---------- |",
-    ]
-    for field in fields:
-        rows.append(
-            f"| {escape_md_cell(str(field['fd_name']))} | "
-            f"{escape_md_cell(render_type(field['fd_type']))} | "
-            f"{escape_md_cell(render_doc_blocks(field.get('fd_descr')))} |"
-        )
-    return "\n".join(rows)
-
-
 def render_instance(inst: dict[str, Any]) -> str:
     return f"instance {render_context(inst.get('id_context', []))}{render_type(inst['id_type'])}"
 
@@ -280,7 +277,7 @@ def render_choice(choice: dict[str, Any]) -> str:
     fields = choice.get("cd_fields") or []
     if fields:
         parts.append("Arguments:")
-        parts.append(render_fields_table(fields))
+        parts.append(render_fields_response_fields(fields))
     return "\n\n".join(parts)
 
 
@@ -301,7 +298,7 @@ def render_template_doc(template: dict[str, Any]) -> str:
     payload = template.get("td_payload") or []
     if payload:
         parts.append("Payload:")
-        parts.append(render_fields_table(payload))
+        parts.append(render_fields_response_fields(payload))
     interface_instances = template.get("td_interfaceInstances") or []
     if interface_instances:
         lines = ["Interface Instances:"]
@@ -415,7 +412,9 @@ def render_constructor(constructor: dict[str, Any]) -> str:
         parts.append(f"- `{f'{name} {args}'.strip()}`")
     elif tag == "RecordC":
         parts.append(f"- `{name}`")
-        parts.append(render_fields_table(payload.get("ac_fields", [])))
+        fields_markup = render_fields_response_fields(payload.get("ac_fields", []))
+        if fields_markup:
+            parts.append(fields_markup)
     elif tag == "InfixC":
         left = render_type(payload["ac_left"], 2)
         right = render_type(payload["ac_right"], 2)
@@ -425,7 +424,7 @@ def render_constructor(constructor: dict[str, Any]) -> str:
     desc = render_doc_blocks(payload.get("ac_descr"))
     if desc:
         parts.append(desc)
-    return "\n".join(parts)
+    return "\n\n".join(parts)
 
 
 def render_adt(adt_union: dict[str, Any]) -> str:

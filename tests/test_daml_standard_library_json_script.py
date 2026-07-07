@@ -94,3 +94,100 @@ PY
     assert str(damlc_bin) in calls
     assert "dpm damlc" not in calls
     assert json.loads(output_json.read_text(encoding="utf-8")) == [{"md_name": "daml-stdlib"}, {"md_name": "daml-prim"}]
+
+
+def test_script_package_set_uses_daml_script_dars(tmp_path: Path) -> None:
+    import zipfile
+
+    sdk_version = "1.2.3"
+    lf_target = "2.2"
+    dpm_home = tmp_path / "dpm"
+    pkg_db_root = dpm_home / "cache/components/damlc" / sdk_version / "damlc-dist-dpm/resources/pkg-db_dir"
+    (pkg_db_root / lf_target).mkdir(parents=True)
+    dar_path = dpm_home / "cache/components/daml-script" / sdk_version / f"daml-script-{lf_target}.dar"
+    dar_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(dar_path, "w") as archive:
+        archive.writestr("pkg/Daml/Script.daml", "module Daml.Script where\n")
+        archive.writestr("pkg/Daml/Script/Internal.daml", "module Daml.Script.Internal where\n")
+
+    log_path = tmp_path / "damlc.log"
+    damlc_bin = dpm_home / "cache/components/damlc" / sdk_version / "damlc-dist-dpm/damlc"
+    damlc_bin.parent.mkdir(parents=True, exist_ok=True)
+    damlc_bin.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$0 $*" >> "$FAKE_DAMLC_LOG"
+output=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output)
+      output="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+python3 - "$output" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        [
+            {"md_name": "Daml.Script"},
+            {"md_name": "Daml.Script.Internal"},
+            {"md_name": "Daml.Script.Internal.Questions"},
+        ]
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+PY
+""",
+        encoding="utf-8",
+    )
+    damlc_bin.chmod(0o755)
+
+    output_json = tmp_path / "script.json"
+    env = os.environ.copy()
+    env.update(
+        {
+            "DPM_HOME": str(dpm_home),
+            "FAKE_DAMLC_LOG": str(log_path),
+        }
+    )
+
+    subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "scripts/generate_daml_standard_library_json.sh"),
+            "--output-json",
+            str(output_json),
+            "--sdk-version",
+            sdk_version,
+            "--lf-target",
+            lf_target,
+            "--sdk-source",
+            "dpm",
+            "--package-set",
+            "script",
+            "--skip-install",
+        ],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    calls = log_path.read_text(encoding="utf-8")
+    assert "--package-name daml-script" in calls
+    assert "--package-db" in calls
+    assert "Daml/Script.daml" in calls
+    assert "Daml/Script/Internal.daml" in calls
+    assert "--include-modules" not in calls
+    assert json.loads(output_json.read_text(encoding="utf-8")) == [
+        {"md_name": "Daml.Script"},
+        {"md_name": "Daml.Script.Internal"},
+    ]

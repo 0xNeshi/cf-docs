@@ -7,6 +7,7 @@ from pathlib import Path
 
 from x2mdx.cli import main as cli_main
 from x2mdx.daml_json.lifecycle import build_daml_doc_report_from_sources
+from x2mdx.daml_json.render import render_fields_response_fields
 from x2mdx.daml_json.snapshots import load_daml_doc_sources
 
 
@@ -108,6 +109,28 @@ def utilities_style_module(name: str) -> dict[str, object]:
 
 
 class DamlJsonTests(unittest.TestCase):
+    def test_render_fields_response_fields_uses_mintlify_component(self) -> None:
+        rendered = render_fields_response_fields(
+            [
+                {
+                    "fd_name": "owner",
+                    "fd_type": {"TypeApp": [{}, "Party", []]},
+                    "fd_descr": ["Owner party"],
+                },
+                {
+                    "fd_name": "amount",
+                    "fd_type": {"TypeLit": "Int"},
+                    "fd_descr": [],
+                },
+            ]
+        )
+
+        self.assertIn('<ResponseField name="owner" type="Party">', rendered)
+        self.assertIn("Owner party", rendered)
+        self.assertIn("</ResponseField>", rendered)
+        self.assertIn('<ResponseField name="amount" type="Int" />', rendered)
+        self.assertNotIn("| Field | Type | Description |", rendered)
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)

@@ -145,7 +145,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-free-gb",
         type=float,
-        default=20.0,
+        default=10.0,
         help="Refuse to start if the source filesystem has less free space. Default: 20.",
     )
     parser.add_argument(

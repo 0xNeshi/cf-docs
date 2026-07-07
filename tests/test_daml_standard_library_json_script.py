@@ -96,7 +96,7 @@ PY
     assert json.loads(output_json.read_text(encoding="utf-8")) == [{"md_name": "daml-stdlib"}, {"md_name": "daml-prim"}]
 
 
-def test_script_package_set_uses_daml_script_dars(tmp_path: Path) -> None:
+def test_daml_script_json_uses_daml_script_dars(tmp_path: Path) -> None:
     import zipfile
 
     sdk_version = "1.2.3"
@@ -163,7 +163,7 @@ PY
     subprocess.run(
         [
             "bash",
-            str(REPO_ROOT / "scripts/generate_daml_standard_library_json.sh"),
+            str(REPO_ROOT / "scripts/generate_daml_script_json.sh"),
             "--output-json",
             str(output_json),
             "--sdk-version",
@@ -172,8 +172,6 @@ PY
             lf_target,
             "--sdk-source",
             "dpm",
-            "--package-set",
-            "script",
             "--skip-install",
         ],
         check=True,

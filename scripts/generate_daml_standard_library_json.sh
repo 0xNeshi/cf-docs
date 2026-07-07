@@ -8,7 +8,7 @@ usage() {
   cat <<'USAGE'
 Usage: generate_daml_standard_library_json.sh --output-json PATH [options]
 
-Generate Daml docs JSON using installed SDK artifacts.
+Generate Daml Standard Library docs JSON using installed SDK artifacts.
 
 SDK source selection:
 - dpm (default): use DPM cache + cached damlc binary.
@@ -20,11 +20,10 @@ Options:
   --output-json PATH   Destination JSON file path. (required)
   --sdk-version VER    SDK version to use. Default: latest stable from get.digitalasset.com.
   --lf-target VER      LF target folder (e.g. 2.2). Default: highest numeric target available.
-  --package-set SET    One of: prim, stdlib, base, script. Default: base.
+  --package-set SET    One of: prim, stdlib, base. Default: base.
                        - prim:   only daml-prim modules
                        - stdlib: only daml-stdlib modules
                        - base:   stdlib + prim merged (matches docs pipeline composition)
-                       - script: daml-script modules from installed daml-script DARs
   --sdk-source SRC     One of: auto, daml, dpm. Default: dpm.
   --daml-home PATH     DAML home dir. Default: $DAML_HOME or ~/.daml
   --dpm-home PATH      DPM home dir. Default: $DPM_HOME or ~/.dpm
@@ -49,10 +48,6 @@ Example:
 USAGE
 }
 
-log() {
-  printf '[daml-docs-json] %s\n' "$*"
-}
-
 require_arg() {
   local flag="$1"
   local value="${2:-}"
@@ -63,20 +58,19 @@ require_arg() {
   fi
 }
 
-latest_sdk_version() {
-  curl -fsSL "https://get.digitalasset.com/install/latest"
-}
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+DAML_DOCS_SCRIPT_DIR="$SCRIPT_DIR"
+# shellcheck source=lib/daml_docs_sdk.sh
+source "$SCRIPT_DIR/lib/daml_docs_sdk.sh"
 
 OUTPUT_JSON=""
-SDK_VERSION="${DAML_DOCS_SDK_VERSION:-latest}"
-LF_TARGET="${DAML_DOCS_LF_TARGET:-}"
+DAML_DOCS_SDK_VERSION="${DAML_DOCS_SDK_VERSION:-latest}"
+DAML_DOCS_LF_TARGET="${DAML_DOCS_LF_TARGET:-}"
 PACKAGE_SET="${DAML_DOCS_PACKAGE_SET:-base}"
-SDK_SOURCE="${DAML_DOCS_SDK_SOURCE:-dpm}"
-DAML_HOME_DIR="${DAML_HOME:-$HOME/.daml}"
-DPM_HOME_DIR="${DPM_HOME:-$HOME/.dpm}"
-SKIP_INSTALL=false
+DAML_DOCS_SDK_SOURCE="${DAML_DOCS_SDK_SOURCE:-dpm}"
+DAML_DOCS_DAML_HOME="${DAML_HOME:-$HOME/.daml}"
+DAML_DOCS_DPM_HOME="${DPM_HOME:-$HOME/.dpm}"
+DAML_DOCS_SKIP_INSTALL=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -85,11 +79,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --sdk-version)
-      SDK_VERSION="$2"
+      DAML_DOCS_SDK_VERSION="$2"
       shift 2
       ;;
     --lf-target)
-      LF_TARGET="$2"
+      DAML_DOCS_LF_TARGET="$2"
       shift 2
       ;;
     --package-set)
@@ -97,19 +91,19 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --sdk-source)
-      SDK_SOURCE="$2"
+      DAML_DOCS_SDK_SOURCE="$2"
       shift 2
       ;;
     --daml-home)
-      DAML_HOME_DIR="$2"
+      DAML_DOCS_DAML_HOME="$2"
       shift 2
       ;;
     --dpm-home)
-      DPM_HOME_DIR="$2"
+      DAML_DOCS_DPM_HOME="$2"
       shift 2
       ;;
     --skip-install)
-      SKIP_INSTALL=true
+      DAML_DOCS_SKIP_INSTALL=true
       shift
       ;;
     -h|--help)
@@ -126,195 +120,33 @@ done
 
 require_arg "--output-json" "$OUTPUT_JSON"
 require_arg "--package-set" "$PACKAGE_SET"
-if [[ "$PACKAGE_SET" != "prim" && "$PACKAGE_SET" != "stdlib" && "$PACKAGE_SET" != "base" && "$PACKAGE_SET" != "script" ]]; then
-  echo "Invalid --package-set '$PACKAGE_SET'. Expected one of: prim, stdlib, base, script." >&2
+if [[ "$PACKAGE_SET" != "prim" && "$PACKAGE_SET" != "stdlib" && "$PACKAGE_SET" != "base" ]]; then
+  echo "Invalid --package-set '$PACKAGE_SET'. Expected one of: prim, stdlib, base." >&2
   exit 1
 fi
-if [[ "$SDK_SOURCE" != "auto" && "$SDK_SOURCE" != "daml" && "$SDK_SOURCE" != "dpm" ]]; then
-  echo "Invalid --sdk-source '$SDK_SOURCE'. Expected one of: auto, daml, dpm." >&2
-  exit 1
-fi
-
-if [[ "$SDK_VERSION" == "latest" ]]; then
-  SDK_VERSION="$(latest_sdk_version)"
-fi
-require_arg "--sdk-version" "$SDK_VERSION"
-
-daml_pkg_db_root() {
-  printf '%s\n' "$DAML_HOME_DIR/sdk/$SDK_VERSION/damlc/resources/pkg-db_dir"
-}
-
-dpm_pkg_db_root() {
-  printf '%s\n' "$DPM_HOME_DIR/cache/components/damlc/$SDK_VERSION/damlc-dist-dpm/resources/pkg-db_dir"
-}
-
-dpm_damlc_bin() {
-  printf '%s\n' "$DPM_HOME_DIR/cache/components/damlc/$SDK_VERSION/damlc-dist-dpm/damlc"
-}
-
-dpm_daml_script_component_root() {
-  printf '%s\n' "$DPM_HOME_DIR/cache/components/daml-script/$SDK_VERSION"
-}
-
-daml_daml_script_component_root() {
-  printf '%s\n' "$DAML_HOME_DIR/sdk/$SDK_VERSION/daml-script"
-}
-
-ensure_daml_sdk() {
-  local pkg_db_root
-  pkg_db_root="$(daml_pkg_db_root)"
-  if [[ -d "$pkg_db_root" ]]; then
-    return 0
-  fi
-  if [[ "$SKIP_INSTALL" == true ]]; then
-    echo "DAML SDK not found at $pkg_db_root and --skip-install was set." >&2
-    return 1
-  fi
-  if ! command -v daml >/dev/null 2>&1; then
-    echo "daml not found in PATH." >&2
-    return 1
-  fi
-  log "Installing SDK ${SDK_VERSION} via daml"
-  if ! daml install "$SDK_VERSION" --quiet; then
-    echo "Failed to install SDK ${SDK_VERSION} via daml." >&2
-    return 1
-  fi
-  if [[ ! -d "$pkg_db_root" ]]; then
-    echo "DAML SDK package DB root not found after install: $pkg_db_root" >&2
-    return 1
-  fi
-  return 0
-}
-
-ensure_dpm_sdk() {
-  local pkg_db_root
-  pkg_db_root="$(dpm_pkg_db_root)"
-  if [[ -d "$pkg_db_root" ]]; then
-    return 0
-  fi
-  if [[ "$SKIP_INSTALL" == true ]]; then
-    echo "DPM SDK cache not found at $pkg_db_root and --skip-install was set." >&2
-    return 1
-  fi
-  if ! command -v dpm >/dev/null 2>&1; then
-    echo "dpm not found in PATH." >&2
-    return 1
-  fi
-  log "Installing SDK ${SDK_VERSION} via dpm"
-  if ! dpm install "$SDK_VERSION"; then
-    echo "Failed to install SDK ${SDK_VERSION} via dpm." >&2
-    return 1
-  fi
-  if [[ ! -d "$pkg_db_root" ]]; then
-    echo "DPM package DB root not found after install: $pkg_db_root" >&2
-    return 1
-  fi
-  return 0
-}
-
-if [[ "$SDK_SOURCE" == "auto" ]]; then
-  if [[ -d "$(dpm_pkg_db_root)" ]]; then
-    SDK_SOURCE="dpm"
-  elif [[ -d "$(daml_pkg_db_root)" ]]; then
-    SDK_SOURCE="daml"
-  elif command -v dpm >/dev/null 2>&1; then
-    SDK_SOURCE="dpm"
-  elif command -v daml >/dev/null 2>&1; then
-    SDK_SOURCE="daml"
-  else
-    echo "Neither daml nor dpm is available and no SDK cache was found." >&2
-    exit 1
-  fi
-fi
-
-PKG_DB_ROOT=""
-DOCS_CMD=()
-
-configure_daml_source() {
-  if ! ensure_daml_sdk; then
-    return 1
-  fi
-  PKG_DB_ROOT="$(daml_pkg_db_root)"
-  DAML_DAMLC_BIN="$DAML_HOME_DIR/sdk/$SDK_VERSION/damlc/damlc"
-  if [[ ! -x "$DAML_DAMLC_BIN" ]]; then
-    echo "damlc binary not found: $DAML_DAMLC_BIN" >&2
-    return 1
-  fi
-  DOCS_CMD=("$DAML_DAMLC_BIN" "docs")
-  SDK_SOURCE="daml"
-  return 0
-}
-
-configure_dpm_source() {
-  if ! ensure_dpm_sdk; then
-    return 1
-  fi
-  PKG_DB_ROOT="$(dpm_pkg_db_root)"
-  DPM_DAMLC_BIN="$(dpm_damlc_bin)"
-  if [[ ! -x "$DPM_DAMLC_BIN" ]]; then
-    echo "DPM damlc binary not found: $DPM_DAMLC_BIN" >&2
-    return 1
-  fi
-  DOCS_CMD=("$DPM_DAMLC_BIN" "docs")
-  SDK_SOURCE="dpm"
-  return 0
-}
-
-case "$SDK_SOURCE" in
-  daml)
-    if ! configure_daml_source; then
-      log "Falling back to dpm for SDK ${SDK_VERSION}"
-      if ! configure_dpm_source; then
-        echo "Failed to resolve SDK ${SDK_VERSION} via daml or dpm." >&2
-        exit 1
-      fi
-    fi
-    ;;
-  dpm)
-    if ! configure_dpm_source; then
-      log "Falling back to daml for SDK ${SDK_VERSION}"
-      if ! configure_daml_source; then
-        echo "Failed to resolve SDK ${SDK_VERSION} via dpm or daml." >&2
-        exit 1
-      fi
-    fi
-    ;;
-esac
-
-if [[ ! -d "$PKG_DB_ROOT" ]]; then
-  echo "Package DB root not found: $PKG_DB_ROOT" >&2
+if [[ "$DAML_DOCS_SDK_SOURCE" != "auto" && "$DAML_DOCS_SDK_SOURCE" != "daml" && "$DAML_DOCS_SDK_SOURCE" != "dpm" ]]; then
+  echo "Invalid --sdk-source '$DAML_DOCS_SDK_SOURCE'. Expected one of: auto, daml, dpm." >&2
   exit 1
 fi
 
-if [[ -z "$LF_TARGET" ]]; then
-  LF_TARGET="$(python3 "$SCRIPT_DIR/select_latest_lf_target.py" "$PKG_DB_ROOT")"
-fi
-require_arg "--lf-target" "$LF_TARGET"
-
-TARGET_ROOT="$PKG_DB_ROOT/$LF_TARGET"
-if [[ ! -d "$TARGET_ROOT" ]]; then
-  echo "LF target root not found: $TARGET_ROOT" >&2
-  echo "Available LF targets under $PKG_DB_ROOT:" >&2
-  find "$PKG_DB_ROOT" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort >&2 || true
-  exit 1
-fi
+daml_docs_sdk_configure
 
 resolve_stdlib_src_root() {
   local candidate
-  candidate="$TARGET_ROOT/daml-stdlib-$SDK_VERSION"
+  candidate="$DAML_DOCS_TARGET_ROOT/daml-stdlib-$DAML_DOCS_SDK_VERSION"
   if [[ -d "$candidate" ]]; then
     echo "$candidate"
     return 0
   fi
 
-  mapfile -t CANDIDATES < <(find "$TARGET_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'daml-stdlib-*' | sort)
+  mapfile -t CANDIDATES < <(find "$DAML_DOCS_TARGET_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'daml-stdlib-*' | sort)
   if [[ "${#CANDIDATES[@]}" -eq 0 ]]; then
-    echo "No daml-stdlib source directory found under $TARGET_ROOT" >&2
+    echo "No daml-stdlib source directory found under $DAML_DOCS_TARGET_ROOT" >&2
     return 1
   fi
 
   for candidate in "${CANDIDATES[@]}"; do
-    if [[ "$(basename -- "$candidate")" == "daml-stdlib-$SDK_VERSION"* ]]; then
+    if [[ "$(basename -- "$candidate")" == "daml-stdlib-$DAML_DOCS_SDK_VERSION"* ]]; then
       echo "$candidate"
       return 0
     fi
@@ -325,146 +157,9 @@ resolve_stdlib_src_root() {
     return 0
   fi
 
-  echo "Multiple daml-stdlib source directories found under $TARGET_ROOT:" >&2
+  echo "Multiple daml-stdlib source directories found under $DAML_DOCS_TARGET_ROOT:" >&2
   printf '  %s\n' "${CANDIDATES[@]}" >&2
   return 1
-}
-
-resolve_package_src_root() {
-  local package_prefix="$1"
-  local not_found_message="$2"
-  local candidate
-
-  candidate="$TARGET_ROOT/$package_prefix-$SDK_VERSION"
-  if [[ -d "$candidate" ]]; then
-    echo "$candidate"
-    return 0
-  fi
-
-  mapfile -t CANDIDATES < <(find "$TARGET_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$package_prefix-*" | sort)
-  if [[ "${#CANDIDATES[@]}" -eq 0 ]]; then
-    echo "$not_found_message" >&2
-    return 1
-  fi
-
-  for candidate in "${CANDIDATES[@]}"; do
-    if [[ "$(basename -- "$candidate")" == "$package_prefix-$SDK_VERSION"* ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  if [[ "${#CANDIDATES[@]}" -eq 1 ]]; then
-    echo "${CANDIDATES[0]}"
-    return 0
-  fi
-
-  echo "Multiple $package_prefix source directories found under $TARGET_ROOT:" >&2
-  printf '  %s\n' "${CANDIDATES[@]}" >&2
-  return 1
-}
-
-resolve_daml_script_dar() {
-  local component_roots=()
-  local candidate
-  local candidates=()
-
-  if [[ "$SDK_SOURCE" == "dpm" ]]; then
-    component_roots+=("$(dpm_daml_script_component_root)")
-  elif [[ "$SDK_SOURCE" == "daml" ]]; then
-    component_roots+=("$(daml_daml_script_component_root)")
-  fi
-
-  for component_root in "${component_roots[@]}"; do
-    if [[ ! -d "$component_root" ]]; then
-      continue
-    fi
-    candidate="$component_root/daml-script-$LF_TARGET.dar"
-    if [[ -f "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-    mapfile -t candidates < <(find "$component_root" -maxdepth 1 -type f -name 'daml-script-*.dar' | sort)
-    for candidate in "${candidates[@]}"; do
-      if [[ "$(basename -- "$candidate")" == "daml-script-$LF_TARGET.dar" ]]; then
-        echo "$candidate"
-        return 0
-      fi
-    done
-    if [[ "${#candidates[@]}" -eq 1 ]]; then
-      echo "${candidates[0]}"
-      return 0
-    fi
-  done
-
-  echo "No daml-script DAR found for SDK ${SDK_VERSION} and LF target ${LF_TARGET}." >&2
-  echo "Checked component roots:" >&2
-  for component_root in "${component_roots[@]}"; do
-    printf '  %s\n' "$component_root" >&2
-  done
-  echo "Install the SDK with dpm install ${SDK_VERSION} (or daml install) and retry." >&2
-  return 1
-}
-
-generate_json_for_daml_script_package() {
-  local output_json="$1"
-  local dar_path
-  local extract_dir
-  local script_file
-  local internal_file
-
-  dar_path="$(resolve_daml_script_dar)"
-  extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/daml-script-src.XXXXXX")"
-  trap 'rm -rf "$extract_dir"' RETURN
-
-  if ! unzip -q "$dar_path" '*.daml' -d "$extract_dir"; then
-    echo "Failed to extract .daml files from $dar_path" >&2
-    return 1
-  fi
-
-  script_file="$(find "$extract_dir" -path '*/Daml/Script.daml' | sort | head -1)"
-  internal_file="$(find "$extract_dir" -path '*/Daml/Script/Internal.daml' | sort | head -1)"
-  if [[ -z "$script_file" || -z "$internal_file" ]]; then
-    echo "Failed to locate Daml.Script entrypoint files in $dar_path" >&2
-    return 1
-  fi
-
-  log "Generating daml-script JSON"
-  log "source=$SDK_SOURCE sdk=$SDK_VERSION lf_target=$LF_TARGET package=daml-script dar=$dar_path entrypoints=2"
-  "${DOCS_CMD[@]}" \
-    --output "$output_json" \
-    --package-name daml-script \
-    --format json \
-    --target "$LF_TARGET" \
-    --package-db "$PKG_DB_ROOT" \
-    -Wno-deprecated-exceptions \
-    "$script_file" \
-    "$internal_file"
-
-  python3 - "$output_json" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-modules = json.loads(path.read_text(encoding="utf-8"))
-if not isinstance(modules, list):
-    raise SystemExit(f"Expected list JSON payload in {path}")
-
-keep = ("Daml.Script", "Daml.Script.Internal")
-by_name = {
-    str(module.get("md_name", "")): module
-    for module in modules
-    if isinstance(module, dict) and isinstance(module.get("md_name"), str)
-}
-filtered = [by_name[name] for name in keep if name in by_name]
-missing = [name for name in keep if name not in by_name]
-if missing:
-    raise SystemExit(f"Missing expected daml-script modules in {path}: {', '.join(missing)}")
-
-path.write_text(json.dumps(filtered, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-print(f"Filtered daml-script modules: {', '.join(keep)}")
-PY
 }
 
 generate_json_for_package() {
@@ -486,19 +181,19 @@ generate_json_for_package() {
     return 1
   fi
 
-  log "Generating $package_name JSON"
-  log "source=$SDK_SOURCE sdk=$SDK_VERSION lf_target=$LF_TARGET package=$package_name files=$file_count"
-  "${DOCS_CMD[@]}" \
+  daml_docs_log "Generating $package_name JSON"
+  daml_docs_log "source=$DAML_DOCS_SDK_SOURCE sdk=$DAML_DOCS_SDK_VERSION lf_target=$DAML_DOCS_LF_TARGET package=$package_name files=$file_count"
+  "${DAML_DOCS_DOCS_CMD[@]}" \
     --output "$output_json" \
     --package-name "$package_name" \
     --format json \
-    --target "$LF_TARGET" \
+    --target "$DAML_DOCS_LF_TARGET" \
     "${daml_files[@]}"
 }
 
 mkdir -p "$(dirname -- "$OUTPUT_JSON")"
 
-PRIM_SRC_ROOT="$TARGET_ROOT/daml-prim"
+PRIM_SRC_ROOT="$DAML_DOCS_TARGET_ROOT/daml-prim"
 STDLIB_SRC_ROOT=""
 
 case "$PACKAGE_SET" in
@@ -508,9 +203,6 @@ case "$PACKAGE_SET" in
   stdlib)
     STDLIB_SRC_ROOT="$(resolve_stdlib_src_root)"
     generate_json_for_package "daml-stdlib" "$STDLIB_SRC_ROOT" "$OUTPUT_JSON"
-    ;;
-  script)
-    generate_json_for_daml_script_package "$OUTPUT_JSON"
     ;;
   base)
     STDLIB_SRC_ROOT="$(resolve_stdlib_src_root)"
@@ -557,4 +249,4 @@ PY
     ;;
 esac
 
-log "Wrote $OUTPUT_JSON"
+daml_docs_log "Wrote $OUTPUT_JSON"

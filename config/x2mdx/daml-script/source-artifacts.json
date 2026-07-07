@@ -1,7 +1,6 @@
 {
   "source": "Published Daml Script docs JSON from local SDK artifacts",
   "publish_version": "3.5.1",
-  "package_set": "script",
   "sdk_source": "dpm",
   "versions": [
     "3.4.9",

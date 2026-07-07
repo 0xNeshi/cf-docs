@@ -147,7 +147,6 @@ def generate_json_snapshot(
     *,
     version: str,
     output_json: Path,
-    package_set: str,
     sdk_source: str,
     lf_target: str | None,
     force_regenerate: bool,
@@ -159,13 +158,11 @@ def generate_json_snapshot(
     output_json.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "bash",
-        str(REPO_ROOT / "scripts" / "generate_daml_standard_library_json.sh"),
+        str(REPO_ROOT / "scripts" / "generate_daml_script_json.sh"),
         "--output-json",
         str(output_json),
         "--sdk-version",
         version,
-        "--package-set",
-        package_set,
         "--sdk-source",
         sdk_source,
     ]
@@ -250,7 +247,6 @@ def main() -> int:
     if not selected_versions:
         raise ValueError("No Daml SDK versions selected")
 
-    package_set = str(source_config.get("package_set") or "script")
     sdk_source = str(source_config.get("sdk_source") or "dpm")
     lf_target = source_config.get("lf_target") if isinstance(source_config.get("lf_target"), str) else None
     publish_version = args.publish_version or source_config.get("publish_version") or selected_versions[-1]
@@ -260,7 +256,6 @@ def main() -> int:
         generate_json_snapshot(
             version=version,
             output_json=cache_dir / "json" / version / "modules.json",
-            package_set=package_set,
             sdk_source=sdk_source,
             lf_target=lf_target,
             force_regenerate=args.force_regenerate,
